@@ -1,59 +1,56 @@
-好的，我来帮您为这个OKX数据下载工具编写一个README.md文件：
+# OKX Historical Data Download Tool
 
-```markdown
-# OKX 历史数据下载工具
+A Python tool for downloading historical data from OKX exchange. Supports downloading trading data for spot, swap, and futures markets.
 
-这是一个用于下载OKX交易所历史数据的Python工具。支持现货（spot）、永续合约（swap）和交割合约（future）的交易数据下载。
+## Features
 
-## 功能特点
+- Multiple data types supported:
+  - Trade-by-trade data (trades)
+  - Aggregated trade data (aggtrades)
+  - Funding rate data (swaprate)
+  - Candlestick data (klines, generated from aggregated trades)
+- Multiple market types supported:
+  - Spot
+  - Perpetual Swap
+  - Futures
+- Customizable time range for downloads
+- Asynchronous concurrent downloading for improved efficiency
+- Automatic retry mechanism for improved stability
+- Data automatically saved in Parquet format for storage efficiency
 
-- 支持多种数据类型：
-  - 逐笔交易数据 (trades)
-  - 聚合交易数据 (aggtrades)
-  - 资金费率数据 (swaprate)
-  - K线数据 (klines，基于聚合交易数据生成)
-- 支持多种交易品种：
-  - 现货 (spot)
-  - 永续合约 (swap)
-  - 交割合约 (future)
-- 支持自定义时间范围下载
-- 异步并发下载，提高下载效率
-- 自动重试机制，提高下载稳定性
-- 数据自动保存为Parquet格式，节省存储空间
-
-## 安装依赖
+## Dependencies
 
 ```bash
 pip install pandas aiohttp tenacity tqdm
 ```
 
-## 使用示例
+## Usage Example
 
 ```python
 import datetime
 from okx_dump.dump import DataDumper
 
-# 初始化下载器
+# Initialize downloader
 dumper = DataDumper(
-    asset_type="swap",  # 可选: "spot", "swap", "future"
-    symbols=["BTC-USDT-SWAP", "ETH-USDT-SWAP"],  # 可选，默认下载所有交易对
-    start_date=datetime.date(2024, 1, 1),  # 可选，默认从2021-10-01开始
-    end_date=datetime.date(2024, 1, 31),  # 可选，默认到昨天
-    save_dir="./data",  # 可选，默认为 "./data/{asset_type}"
-    proxy="http://your-proxy-url"  # 可选，设置代理
+    asset_type="swap",  # Options: "spot", "swap", "future"
+    symbols=["BTC-USDT-SWAP", "ETH-USDT-SWAP"],  # Optional, downloads all pairs by default
+    start_date=datetime.date(2024, 1, 1),  # Optional, defaults to 2021-10-01
+    end_date=datetime.date(2024, 1, 31),  # Optional, defaults to yesterday
+    save_dir="./data",  # Optional, defaults to "./data/{asset_type}"
+    proxy="http://your-proxy-url"  # Optional, set proxy
 )
 
-# 下载数据
+# Download data
 dumper.dump_symbols(
-    data_type="trades",  # 可选: "trades", "aggtrades", "swaprate", "klines"
-    start_date=datetime.date(2024, 1, 1),  # 可选，覆盖初始化时的设置
-    end_date=datetime.date(2024, 1, 31)  # 可选，覆盖初始化时的设置
+    data_type="trades",  # Options: "trades", "aggtrades", "swaprate", "klines"
+    start_date=datetime.date(2024, 1, 1),  # Optional, overrides initialization setting
+    end_date=datetime.date(2024, 1, 31)  # Optional, overrides initialization setting
 )
 ```
 
-## 数据存储结构
+## Data Storage Structure
 
-下载的数据将按以下结构保存：
+Downloaded data will be saved in the following structure:
 ```
 data/
 ├── spot/
@@ -67,35 +64,34 @@ data/
 └── future/
 ```
 
-## 数据格式
+## Data Formats
 
-### 逐笔交易数据 (trades/aggtrades)
-- trade_id: 交易ID
-- side: 交易方向
-- size: 交易数量
-- price: 交易价格
-- created_time: 创建时间（毫秒时间戳）
-- timestamp: UTC时间戳
+### Trade Data (trades/aggtrades)
+- trade_id: Trade ID
+- side: Trade direction
+- size: Trade size
+- price: Trade price
+- created_time: Creation time (millisecond timestamp)
+- timestamp: UTC timestamp
 
-### 资金费率数据 (swaprate)
-- contract_type: 合约类型
-- funding_rate: 资金费率
-- real_funding_rate: 实际资金费率
-- funding_time: 结算时间（毫秒时间戳）
-- timestamp: UTC时间戳
+### Funding Rate Data (swaprate)
+- contract_type: Contract type
+- funding_rate: Funding rate
+- real_funding_rate: Actual funding rate
+- funding_time: Settlement time (millisecond timestamp)
+- timestamp: UTC timestamp
 
-### K线数据 (klines)
-- timestamp: UTC时间戳
-- open: 开盘价
-- high: 最高价
-- low: 最低价
-- close: 收盘价
-- volume: 成交量
+### Candlestick Data (klines)
+- timestamp: UTC timestamp
+- open: Opening price
+- high: Highest price
+- low: Lowest price
+- close: Closing price
+- volume: Trading volume
 
-## 注意事项
+## Notes
 
-1. 数据下载依赖网络连接，建议使用稳定的网络环境
-2. 大量数据下载可能需要较长时间，请耐心等待
-3. 下载的数据会自动保存为Parquet格式，可以使用pandas读取
-4. 如果遇到网络问题，程序会自动重试
-```
+1. Data download depends on network connection, stable network environment recommended
+2. Large data downloads may take considerable time, please be patient
+3. Downloaded data is automatically saved in Parquet format, readable with pandas
+4. The program will automatically retry in case of network issues
