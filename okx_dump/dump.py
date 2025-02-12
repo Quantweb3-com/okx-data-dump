@@ -9,6 +9,15 @@ import aiohttp
 import aiohttp.client_exceptions
 import aiohttp.web_exceptions
 import aiohttp.http_exceptions
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    filename="okx_dump.log",
+    filemode="a",
+)
 
 
 class DataDumper:
@@ -25,6 +34,7 @@ class DataDumper:
         chunk_size: int = 1024 * 16,
         proxy: str | None = None,
     ):
+        self._log = logging.getLogger("okx_dump")
         self._loop = asyncio.get_event_loop()
         self._chunk_size = chunk_size
         self._proxy = proxy
@@ -39,7 +49,9 @@ class DataDumper:
             ).date()
 
         self.asset_type = asset_type
-        self._info[asset_type] = self.get_exchange_info(asset_type=asset_type, quote_currency=quote_currency)
+        self._info[asset_type] = self.get_exchange_info(
+            asset_type=asset_type, quote_currency=quote_currency
+        )
 
         if symbols is None:
             self.symbols = list(self._info[asset_type].keys())
@@ -53,17 +65,18 @@ class DataDumper:
         else:
             self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
-    
-    
+
     async def _get_exchange_info(
         self,
         asset_type: Literal["spot", "swap", "future"] = "spot",
     ):
         exchange_map = {"spot": "okex", "swap": "okex-swap", "future": "okex-futures"}
         async with aiohttp.ClientSession(trust_env=True, proxy=self._proxy) as session:
-            async with session.get(f"https://api.tardis.dev/v1/exchanges/{exchange_map[asset_type]}") as response:
+            async with session.get(
+                f"https://api.tardis.dev/v1/exchanges/{exchange_map[asset_type]}"
+            ) as response:
                 return await response.json()
-        
+
     def get_exchange_info(
         self,
         asset_type: Literal["spot", "swap", "future"] = "spot",
@@ -79,7 +92,9 @@ class DataDumper:
             datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
         ).date()
 
-        data = self._loop.run_until_complete(self._get_exchange_info(asset_type=asset_type))
+        data = self._loop.run_until_complete(
+            self._get_exchange_info(asset_type=asset_type)
+        )
 
         info = {}
         for symbol in data["datasets"]["symbols"][1:]:
@@ -138,11 +153,10 @@ class DataDumper:
         file_name = f"{symbol}-{data_type}-{date.strftime('%Y-%m-%d')}.zip"
         url = f"{base_url}/{date_str}/{file_name}"
         return {"url": url, "file_name": file_name, "date": date.strftime("%Y-%m-%d")}
-    
+
     @tenacity.retry(
-        retry=tenacity.retry_if_exception_type(Exception),
         stop=tenacity.stop_after_attempt(5),
-        wait=tenacity.wait_exponential(exp_base=2, multiplier=2, min=8, max=64),
+        wait=tenacity.wait_exponential(exp_base=2, multiplier=4, max=64),
     )
     async def _async_download_symbol_data(
         self,
@@ -151,68 +165,91 @@ class DataDumper:
         date: datetime.date,
     ):
         res = self.generate_url(symbol=symbol, data_type=data_type, date=date)
-        
-        
+        zip_path = os.path.join(self.save_dir, data_type, res["date"], res["file_name"])
+        parquet_path = zip_path.replace(".zip", ".parquet")
+
+        if os.path.exists(parquet_path):
+            self._log.debug(f"symbol {symbol} {data_type} {date} already exists")
+            return parquet_path
+
         async with aiohttp.ClientSession(trust_env=True, proxy=self._proxy) as session:
             async with session.get(res["url"]) as response:
-                response.raise_for_status()
-                
-                zip_path = os.path.join(self.save_dir, data_type, res["date"], res["file_name"])
-                parquet_path = zip_path.replace(".zip", ".parquet")
-                if not os.path.exists(parquet_path):
-                    os.makedirs(os.path.dirname(zip_path), exist_ok=True)
-                    
-                    if data_type in ["trades", "aggtrades"]:
-                        with open(zip_path, "wb") as f:
-                            async for chunk in response.content.iter_chunked(self._chunk_size):
-                                f.write(chunk)
+                try:
+                    response.raise_for_status()
+                except aiohttp.client_exceptions.ClientResponseError as e:
+                    if e.status == 404:
+                        self._log.warning(
+                            f"symbol {symbol} {data_type} {date} not found"
+                        )
+                        return None
+                    elif e.status in [500, 502, 503, 504, 429, 408]:
+                        raise tenacity.TryAgain
                     else:
-                        content = await response.read()
-                        with open(zip_path, "wb") as f:
-                            f.write(content)
-                
-                    if data_type == "aggtrades":
-                        df = pd.read_csv(
-                            zip_path,
-                            encoding="unicode_escape",
-                            names=["trade_id", "side", "size", "price", "created_time"],
-                            header=0,
-                        )
-                        df["timestamp"] = pd.to_datetime(
-                            df["created_time"], unit="ms", utc=True
-                        )
-                        df.sort_values(by="timestamp", inplace=True)
-                        df.to_parquet(parquet_path, index=False)
-                    elif data_type == "swaprate":
-                        df = pd.read_csv(
-                            zip_path,
-                            encoding="unicode_escape",
-                            names=["contract_type", "funding_rate", "real_funding_rate", "funding_time"],
-                            header=0,
-                        )
-                        df["timestamp"] = pd.to_datetime(
-                            df["funding_time"], unit="ms", utc=True
-                        )
-                        df.to_parquet(parquet_path, index=False)
-                    elif data_type == "trades":
-                        df = pd.read_csv(
-                            zip_path,
-                            encoding="unicode_escape",
-                            names=["trade_id", "side", "size", "price", "created_time"],
-                            header=0,
-                        )
-                        df["timestamp"] = pd.to_datetime(
-                            df["created_time"], unit="ms", utc=True
-                        )
-                        df.sort_values(by="timestamp", inplace=True)
-                        df.to_parquet(parquet_path, index=False)
-                    os.remove(zip_path)
-                return parquet_path
+                        raise e
+
+                os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+                if data_type in ["trades", "aggtrades"]:
+                    with open(zip_path, "wb") as f:
+                        async for chunk in response.content.iter_chunked(
+                            self._chunk_size
+                        ):
+                            f.write(chunk)
+                else:
+                    content = await response.read()
+                    with open(zip_path, "wb") as f:
+                        f.write(content)
+                if data_type == "aggtrades":
+                    df = pd.read_csv(
+                        zip_path,
+                        encoding="unicode_escape",
+                        names=["trade_id", "side", "size", "price", "created_time"],
+                        header=0,
+                    )
+                    df["timestamp"] = pd.to_datetime(
+                        df["created_time"], unit="ms", utc=True
+                    )
+                    df.sort_values(by="timestamp", inplace=True)
+                    df.to_parquet(parquet_path, index=False)
+                elif data_type == "swaprate":
+                    df = pd.read_csv(
+                        zip_path,
+                        encoding="unicode_escape",
+                        names=[
+                            "contract_type",
+                            "funding_rate",
+                            "real_funding_rate",
+                            "funding_time",
+                        ],
+                        header=0,
+                    )
+                    df["timestamp"] = pd.to_datetime(
+                        df["funding_time"], unit="ms", utc=True
+                    )
+                    df.to_parquet(parquet_path, index=False)
+                elif data_type == "trades":
+                    df = pd.read_csv(
+                        zip_path,
+                        encoding="unicode_escape",
+                        names=["trade_id", "side", "size", "price", "created_time"],
+                        header=0,
+                    )
+                    df["timestamp"] = pd.to_datetime(
+                        df["created_time"], unit="ms", utc=True
+                    )
+                    df.sort_values(by="timestamp", inplace=True)
+                    df.to_parquet(parquet_path, index=False)
+                os.remove(zip_path)
+        return parquet_path
 
     async def _aggregate_symbol_kline(self, symbol, date: datetime.date):
         parquet_path = await self._async_download_symbol_data(
             symbol=symbol, data_type="aggtrades", date=date
         )  # we use aggtrades to generate kline
+        if parquet_path is None:
+            self._log.warning(
+                f"symbol {symbol} {date} aggtrades not found -> no kline generated"
+            )
+            return
         save_path = parquet_path.replace("aggtrades", "klines")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         if os.path.exists(save_path):
@@ -238,7 +275,7 @@ class DataDumper:
         ohlcv.reset_index(inplace=True)
         ohlcv.to_parquet(save_path, index=False)
         return save_path
-    
+
     def _dump_symbol_data(
         self,
         symbol: str,
@@ -257,9 +294,10 @@ class DataDumper:
             end_date = symbol_info["end_date"]
 
         if start_date > end_date:
-            raise ValueError(
-                f"start_date {start_date} is greater than end_date {end_date}"
+            self._log.debug(
+                f"start_date {start_date} is greater than end_date {end_date} for symbol {symbol}, skip"
             )
+            return
 
         if start_date < symbol_info["start_date"]:
             start_date = symbol_info["start_date"]
@@ -278,9 +316,14 @@ class DataDumper:
             func = self._async_download_symbol_data
             params = [(symbol, data_type, date) for date in date_list]
 
-        self._loop.run_until_complete(tqdm.gather(*[func(*param) for param in params], leave=False, desc=f"Dumping {symbol} {data_type}"))
-        
-        
+        self._loop.run_until_complete(
+            tqdm.gather(
+                *[func(*param) for param in params],
+                leave=False,
+                desc=f"Dumping {symbol} {data_type}",
+            )
+        )
+
     def dump_symbols(
         self,
         data_type: Literal["aggtrades", "trades", "swaprate", "klines"],
@@ -288,12 +331,15 @@ class DataDumper:
         end_date: datetime.date | None = None,
     ):
         for symbol in tqdm(self.symbols, desc="Dumping symbols", leave=False):
-            self._dump_symbol_data(
-                symbol=symbol,
-                data_type=data_type,
-                start_date=start_date,
-                end_date=end_date,
-            )
+            try:
+                self._dump_symbol_data(
+                    symbol=symbol,
+                    data_type=data_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except Exception as e:
+                self._log.error(f"Error dumping {symbol} {data_type}: {e}")
 
 
 if __name__ == "__main__":

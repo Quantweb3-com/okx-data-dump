@@ -8,5 +8,5 @@ dumper = DataDumper(
 
 dumper.dump_symbols(
     data_type="klines",
-    start_date=datetime.date(2024, 1, 1),
+    start_date=datetime.date(2023, 1, 1),
 )
