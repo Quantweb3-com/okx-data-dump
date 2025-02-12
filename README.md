@@ -18,10 +18,18 @@ A Python tool for downloading historical data from OKX exchange. Supports downlo
 - Automatic retry mechanism for improved stability
 - Data automatically saved in Parquet format for storage efficiency
 
-## Dependencies
+## Installation
 
 ```bash
-pip install pandas aiohttp tenacity tqdm
+pip install okx-dump
+```
+
+## Build from source
+
+```bash
+git clone https://github.com/okx-dump/okx-dump.git
+cd okx-dump
+poetry install
 ```
 
 ## Usage Example
