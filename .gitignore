@@ -2,3 +2,5 @@ data/
 .python-version
 __pycache__/
 *.log
+dist/
+build/

@@ -63,7 +63,7 @@ class DataDumper:
         if save_dir is None:
             self.save_dir = os.path.join("./data", asset_type)
         else:
-            self.save_dir = save_dir
+            self.save_dir = os.path.join(save_dir, asset_type)
         os.makedirs(self.save_dir, exist_ok=True)
 
     async def _get_exchange_info(
