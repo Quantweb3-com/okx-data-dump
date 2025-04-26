@@ -145,14 +145,24 @@ class DataDumper:
     def generate_url(
         self,
         symbol: str,
-        data_type: Literal["aggtrades", "trades", "swaprate"],
+        data_type: Literal["aggtrades", "trades", "swaprate", "swaprate-all"],
         date: datetime.date,
     ):
-        base_url = f"https://www.okx.com/cdn/okex/traderecords/{data_type}/daily"
-        date_str = date.strftime("%Y%m%d")
-        file_name = f"{symbol}-{data_type}-{date.strftime('%Y-%m-%d')}.zip"
-        url = f"{base_url}/{date_str}/{file_name}"
-        return {"url": url, "file_name": file_name, "date": date.strftime("%Y-%m-%d")}
+        """
+        https://www.okx.com/cdn/okex/traderecords/swaprate/monthly/202504/allswaprate-swaprate-2025-04-01.zip
+        """
+        if data_type == "swaprate-all":
+            base_url = "https://www.okx.com/cdn/okex/traderecords/swaprate/monthly"
+            date_str = date.strftime("%Y%m")
+            file_name = f"{symbol}-swaprate-{date.strftime('%Y-%m-%d')}.zip" # symbol = allswaprate
+            url = f"{base_url}/{date_str}/{file_name}"
+            return {"url": url, "file_name": file_name, "date": date.strftime("%Y-%m-%d")}
+        else:
+            base_url = f"https://www.okx.com/cdn/okex/traderecords/{data_type}/daily"
+            date_str = date.strftime("%Y%m%d")
+            file_name = f"{symbol}-{data_type}-{date.strftime('%Y-%m-%d')}.zip"
+            url = f"{base_url}/{date_str}/{file_name}"
+            return {"url": url, "file_name": file_name, "date": date.strftime("%Y-%m-%d")}
 
     @tenacity.retry(
         stop=tenacity.stop_after_attempt(5),
@@ -161,7 +171,7 @@ class DataDumper:
     async def _async_download_symbol_data(
         self,
         symbol: str,
-        data_type: Literal["aggtrades", "trades", "swaprate"],
+        data_type: Literal["aggtrades", "trades", "swaprate", "swaprate-all"],
         date: datetime.date,
     ):
         res = self.generate_url(symbol=symbol, data_type=data_type, date=date)
@@ -226,6 +236,17 @@ class DataDumper:
                         df["funding_time"], unit="ms", utc=True
                     )
                     df.to_parquet(parquet_path, index=False)
+                elif data_type == "swaprate-all":
+                    df = pd.read_csv(
+                        zip_path,
+                        encoding="unicode_escape",
+                        names=["instrument_name", "contract_type", "funding_rate_predict", "real_funding_rate", "funding_time"],
+                        header=0,
+                    )
+                    df["timestamp"] = pd.to_datetime(
+                        df["funding_time"], unit="ms", utc=True
+                    )
+                    df.to_parquet(parquet_path, index=False)
                 elif data_type == "trades":
                     df = pd.read_csv(
                         zip_path,
@@ -279,30 +300,36 @@ class DataDumper:
     def _dump_symbol_data(
         self,
         symbol: str,
-        data_type: Literal["aggtrades", "trades", "swaprate", "klines"],
+        data_type: Literal["aggtrades", "trades", "swaprate", "klines", "swaprate-all"],
         start_date: datetime.date | None = None,
         end_date: datetime.date | None = None,
     ):
-        info = self._info[self.asset_type]
-        if symbol not in info:
-            raise ValueError(f"symbol {symbol} not found in {self.asset_type}")
+        if data_type == "swaprate-all":
+            if start_date is None:
+                start_date = datetime.date(2021, 10, 1)
+            if end_date is None:
+                end_date = datetime.date.today() - datetime.timedelta(days=1)
+        else:
+            info = self._info[self.asset_type]
+            if symbol not in info:
+                raise ValueError(f"symbol {symbol} not found in {self.asset_type}")
 
-        symbol_info = info[symbol]
-        if start_date is None:
-            start_date = symbol_info["start_date"]
-        if end_date is None:
-            end_date = symbol_info["end_date"]
+            symbol_info = info[symbol]
+            if start_date is None:
+                start_date = symbol_info["start_date"]
+            if end_date is None:
+                end_date = symbol_info["end_date"]
 
-        if start_date > end_date:
-            self._log.debug(
-                f"start_date {start_date} is greater than end_date {end_date} for symbol {symbol}, skip"
-            )
-            return
+            if start_date > end_date:
+                self._log.debug(
+                    f"start_date {start_date} is greater than end_date {end_date} for symbol {symbol}, skip"
+                )
+                return
 
-        if start_date < symbol_info["start_date"]:
-            start_date = symbol_info["start_date"]
-        if end_date > symbol_info["end_date"]:
-            end_date = symbol_info["end_date"]
+            if start_date < symbol_info["start_date"]:
+                start_date = symbol_info["start_date"]
+            if end_date > symbol_info["end_date"]:
+                end_date = symbol_info["end_date"]
 
         date_list = []
         while start_date <= end_date:
@@ -312,6 +339,9 @@ class DataDumper:
         if data_type == "klines":
             func = self._aggregate_symbol_kline
             params = [(symbol, date) for date in date_list]
+        elif data_type == "swaprate-all":
+            func = self._async_download_symbol_data
+            params = [(symbol, data_type, date) for date in date_list]
         else:
             func = self._async_download_symbol_data
             params = [(symbol, data_type, date) for date in date_list]
@@ -326,20 +356,28 @@ class DataDumper:
 
     def dump_symbols(
         self,
-        data_type: Literal["aggtrades", "trades", "swaprate", "klines"],
+        data_type: Literal["aggtrades", "trades", "swaprate", "klines", "swaprate-all"],
         start_date: datetime.date | None = None,
         end_date: datetime.date | None = None,
     ):
-        for symbol in tqdm(self.symbols, desc="Dumping symbols", leave=False):
-            try:
-                self._dump_symbol_data(
-                    symbol=symbol,
-                    data_type=data_type,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            except Exception as e:
-                self._log.error(f"Error dumping {symbol} {data_type}: {e}")
+        if data_type == "swaprate-all":
+            self._dump_symbol_data(
+                symbol="allswaprate",
+                data_type=data_type,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        else:
+            for symbol in tqdm(self.symbols, desc="Dumping symbols", leave=False):
+                try:
+                    self._dump_symbol_data(
+                        symbol=symbol,
+                        data_type=data_type,
+                        start_date=start_date,
+                        end_date=end_date,
+                    )
+                except Exception as e:
+                    self._log.error(f"Error dumping {symbol} {data_type}: {e}")
 
 
 if __name__ == "__main__":
